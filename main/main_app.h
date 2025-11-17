@@ -14,6 +14,7 @@ extern "C" {
 
 #include "BoardAPI.h"
 #include "Queue.h"
+#include "RobStride.h"
 
 #ifdef __cplusplus
 }

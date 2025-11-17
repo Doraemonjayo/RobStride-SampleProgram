@@ -30,11 +30,17 @@ static void can2_transmitQueue(uint32_t id, const uint8_t *data, uint8_t dlc, bo
 
 static CanPacket can2_rxPacket = {0};
 
+RobStride robstride;
+uint8_t mode = 255;
+float target = 0;
+
 void setup() {
 	timer_startUs();
 
 	Queue_init(&can1_txQueue, can1_txBuffer, sizeof(CanPacket), CAN_QUEUE_CAPACITY, false, disable_irq_nest, enable_irq_nest);
 	Queue_init(&can2_txQueue, can2_txBuffer, sizeof(CanPacket), CAN_QUEUE_CAPACITY, false, disable_irq_nest, enable_irq_nest);
+
+	RobStride_Init(&robstride, 0x7F, false, can1_transmitQueue);
 
 	HAL_Delay(500);
 
@@ -68,11 +74,24 @@ static void task1kHz() {
 
 	gpio_setLedR((tick % 1000 < 500) ? GPIO_PIN_SET : GPIO_PIN_RESET);
 
+	if (tick % 50 == 0) {
+		switch(mode) {
+			case 0: RobStride_Enable_Motor(&robstride); break;
+			case 1: RobStride_Disenable_Motor(&robstride, 1); break;
+			case 2: RobStride_Motor_move_control(&robstride, 5, 0, 0, 0.0, 0.0); break;
+			case 3: RobStride_Motor_Pos_control(&robstride, 2.0, target); break;
+			case 4: RobStride_Motor_Speed_control(&robstride, target, 5.0); break;
+			case 5: RobStride_Motor_current_control(&robstride, target); break;
+			default: break;
+		}
+//		mode = 255;
+	}
+
 	tick++;
 }
 
 static void can1_rxCallback(uint32_t id, uint8_t *data, uint8_t dlc, bool isExtended, bool isRemote) {
-
+	RobStride_Motor_Analysis(&robstride, id, data, dlc, isExtended, isRemote);
 }
 
 static void can2_rxCallback(uint32_t id, uint8_t *data, uint8_t dlc, bool isExtended, bool isRemote) {

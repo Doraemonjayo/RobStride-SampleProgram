@@ -3,8 +3,8 @@
 
 #define P_MIN -12.5f
 #define P_MAX 12.5f
-#define V_MIN -44.0f
-#define V_MAX 44.0f
+#define V_MIN -33.0f
+#define V_MAX 33.0f
 #define KP_MIN 0.0f
 #define KP_MAX 500.0f
 #define KD_MIN 0.0f
@@ -98,12 +98,13 @@ uint8_t mapFaults(uint16_t fault16) {
 *******************************************************************************/
 void RobStride_Motor_Analysis(RobStride *robstride, uint32_t id, uint8_t *data, uint8_t dlc, bool isExtended, bool isRemote)
 {
-	if (!isExtended) return;
 	if (isRemote) return;
 	if (dlc != 8) return;
 
     if(robstride->MIT_Mode)
     {
+    	if (isExtended) return;
+
         if((id & 0xFF) == 0XFD)
         {
             // MIT Fault frame
@@ -129,6 +130,8 @@ void RobStride_Motor_Analysis(RobStride *robstride, uint32_t id, uint8_t *data, 
     }
     else
     {
+    	if (!isExtended) return;
+
         if ((uint8_t)((id & 0xFF00) >> 8) == robstride->CAN_ID)
         {
             int type = (int)((id & 0x3F000000) >> 24);
@@ -150,7 +153,7 @@ void RobStride_Motor_Analysis(RobStride *robstride, uint32_t id, uint8_t *data, 
             {
                 for (int index_num = 0; index_num <= 13; index_num++)
                 {
-                    if ((data[1]<<8 | data[0]) == Index_List[index_num])
+                    if ((data[1]<<8 | data[0]) == RobStride_Index_List[index_num])
                         switch(index_num)
                         {
                             case 0:  robstride->drw.run_mode.data    = (uint8_t)(data[4]); break;
@@ -216,15 +219,15 @@ void RobStride_Motor_move_control(RobStride *robstride, float Torque, float Angl
 
     if (robstride->drw.run_mode.data != 0)
     {
-        Set_RobStride_Motor_parameter(robstride, 0X7005, move_control_mode, Set_mode); // Set motor mode
+        Set_RobStride_Motor_parameter(robstride, 0X7005, move_control_mode, RobStride_Set_mode); // Set motor mode
         Get_RobStride_Motor_parameter(robstride, 0x7005);
-        Enable_Motor(robstride);
+        RobStride_Enable_Motor(robstride);
         robstride->Motor_Set_All.set_motor_mode = move_control_mode;
     }
 
     if (robstride->Pos_Info.pattern != 2)
     {
-        Enable_Motor(robstride);
+        RobStride_Enable_Motor(robstride);
     }
 
     txdata[0] = float_to_uint(robstride->Motor_Set_All.set_angle, P_MIN, P_MAX, 16)>>8;
@@ -407,14 +410,14 @@ void RobStride_Motor_Pos_control(RobStride *robstride, float Speed, float Angle)
 
     if (robstride->drw.run_mode.data != 1)
     {
-        Set_RobStride_Motor_parameter(robstride, 0X7005, Pos_control_mode, Set_mode);
+        Set_RobStride_Motor_parameter(robstride, 0X7005, Pos_control_mode, RobStride_Set_mode);
         Get_RobStride_Motor_parameter(robstride, 0x7005);
         robstride->Motor_Set_All.set_motor_mode = Pos_control_mode;
-        Enable_Motor(robstride);
-        Set_RobStride_Motor_parameter(robstride, 0X7024, robstride->Motor_Set_All.set_limit_speed, Set_parameter);
-        Set_RobStride_Motor_parameter(robstride, 0X7025, robstride->Motor_Set_All.set_acceleration, Set_parameter);
+        RobStride_Enable_Motor(robstride);
+        Set_RobStride_Motor_parameter(robstride, 0X7024, robstride->Motor_Set_All.set_limit_speed, RobStride_Set_parameter);
+        Set_RobStride_Motor_parameter(robstride, 0X7025, robstride->Motor_Set_All.set_acceleration, RobStride_Set_parameter);
     }
-    Set_RobStride_Motor_parameter(robstride, 0X7016, robstride->Motor_Set_All.set_angle, Set_parameter);
+    Set_RobStride_Motor_parameter(robstride, 0X7016, robstride->Motor_Set_All.set_angle, RobStride_Set_parameter);
 }
 
 /*******************************************************************************
@@ -434,12 +437,12 @@ void RobStride_Motor_CSP_control(RobStride *robstride, float Angle, float limit_
 
         if (robstride->drw.run_mode.data != 1)
         {
-            Set_RobStride_Motor_parameter(robstride, 0X7005, CSP_control_mode, Set_mode);
+            Set_RobStride_Motor_parameter(robstride, 0X7005, CSP_control_mode, RobStride_Set_mode);
             Get_RobStride_Motor_parameter(robstride, 0x7005);
-            Enable_Motor(robstride);
-            Set_RobStride_Motor_parameter(robstride, 0X7017, robstride->Motor_Set_All.set_limit_speed, Set_parameter);
+            RobStride_Enable_Motor(robstride);
+            Set_RobStride_Motor_parameter(robstride, 0X7017, robstride->Motor_Set_All.set_limit_speed, RobStride_Set_parameter);
         }
-        Set_RobStride_Motor_parameter(robstride, 0X7016, robstride->Motor_Set_All.set_angle, Set_parameter);
+        Set_RobStride_Motor_parameter(robstride, 0X7016, robstride->Motor_Set_All.set_angle, RobStride_Set_parameter);
     }
 }
 
@@ -457,14 +460,14 @@ void RobStride_Motor_Speed_control(RobStride *robstride, float Speed, float limi
 
     if (robstride->drw.run_mode.data != 2)
     {
-        Set_RobStride_Motor_parameter(robstride, 0X7005, Speed_control_mode, Set_mode);
+        Set_RobStride_Motor_parameter(robstride, 0X7005, Speed_control_mode, RobStride_Set_mode);
         Get_RobStride_Motor_parameter(robstride, 0x7005);
-        Enable_Motor(robstride);
+        RobStride_Enable_Motor(robstride);
         robstride->Motor_Set_All.set_motor_mode = Speed_control_mode;
-        Set_RobStride_Motor_parameter(robstride, 0X7018, robstride->Motor_Set_All.set_limit_cur, Set_parameter);
-        Set_RobStride_Motor_parameter(robstride, 0X7022, 10, Set_parameter);
+        Set_RobStride_Motor_parameter(robstride, 0X7018, robstride->Motor_Set_All.set_limit_cur, RobStride_Set_parameter);
+        Set_RobStride_Motor_parameter(robstride, 0X7022, 10, RobStride_Set_parameter);
     }
-    Set_RobStride_Motor_parameter(robstride, 0X700A, robstride->Motor_Set_All.set_speed, Set_parameter);
+    Set_RobStride_Motor_parameter(robstride, 0X700A, robstride->Motor_Set_All.set_speed, RobStride_Set_parameter);
 }
 
 /*******************************************************************************
@@ -480,13 +483,13 @@ void RobStride_Motor_current_control(RobStride *robstride, float current)
 
     if (robstride->Motor_Set_All.set_motor_mode != 3)
     {
-        Set_RobStride_Motor_parameter(robstride, 0X7005, Elect_control_mode, Set_mode);
+        Set_RobStride_Motor_parameter(robstride, 0X7005, Elect_control_mode, RobStride_Set_mode);
         Get_RobStride_Motor_parameter(robstride, 0x7005);
         robstride->Motor_Set_All.set_motor_mode = Elect_control_mode;
-        Enable_Motor(robstride);
+        RobStride_Enable_Motor(robstride);
     }
 
-    Set_RobStride_Motor_parameter(robstride, 0X7006, robstride->Motor_Set_All.set_current, Set_parameter);
+    Set_RobStride_Motor_parameter(robstride, 0X7006, robstride->Motor_Set_All.set_current, RobStride_Set_parameter);
 }
 
 /*******************************************************************************
@@ -496,7 +499,7 @@ void RobStride_Motor_current_control(RobStride *robstride, float current)
 *******************************************************************************/
 void RobStride_Motor_Set_Zero_control(RobStride *robstride)
 {
-    Set_RobStride_Motor_parameter(robstride, 0X7005, Set_Zero_mode, Set_mode);
+    Set_RobStride_Motor_parameter(robstride, 0X7005, Set_Zero_mode, RobStride_Set_mode);
 }
 
 /*******************************************************************************
@@ -504,7 +507,7 @@ void RobStride_Motor_Set_Zero_control(RobStride *robstride)
 * @Param        : None
 * @Return       : void
 *******************************************************************************/
-void Enable_Motor(RobStride *robstride)
+void RobStride_Enable_Motor(RobStride *robstride)
 {
     if (robstride->MIT_Mode)
     {
@@ -524,7 +527,7 @@ void Enable_Motor(RobStride *robstride)
 * @Param        : clear_error  (0: keep errors, 1: clear errors)
 * @Return       : void
 *******************************************************************************/
-void Disenable_Motor(RobStride *robstride, uint8_t clear_error)
+void RobStride_Disenable_Motor(RobStride *robstride, uint8_t clear_error)
 {
     if (robstride->MIT_Mode)
     {
@@ -539,7 +542,7 @@ void Disenable_Motor(RobStride *robstride, uint8_t clear_error)
         robstride->canTxFunc(Communication_Type_MotorStop<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
         		txdata, 8, true, false);
 
-        Set_RobStride_Motor_parameter(robstride, 0X7005, move_control_mode, Set_mode);
+        Set_RobStride_Motor_parameter(robstride, 0X7005, move_control_mode, RobStride_Set_mode);
     }
 }
 
@@ -599,7 +602,7 @@ void Get_RobStride_Motor_parameter(RobStride *robstride, uint16_t Index)
 *******************************************************************************/
 void Set_CAN_ID(RobStride *robstride, uint8_t Set_CAN_ID)
 {
-    Disenable_Motor(robstride, 0);
+    RobStride_Disenable_Motor(robstride, 0);
 
     uint8_t txdata[8] = {0};                // TX data
 
@@ -616,7 +619,7 @@ void Set_CAN_ID(RobStride *robstride, uint8_t Set_CAN_ID)
 *******************************************************************************/
 void Set_ZeroPos(RobStride *robstride)
 {
-    Disenable_Motor(robstride, 0);                      // Disable motor
+    RobStride_Disenable_Motor(robstride, 0);                      // Disable motor
 
     uint8_t txdata[8] = {0};                // TX data
 
@@ -625,7 +628,7 @@ void Set_ZeroPos(RobStride *robstride)
     robstride->canTxFunc(Communication_Type_SetPosZero<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
     		txdata, 8, true, false);
 
-    Enable_Motor(robstride);
+    RobStride_Enable_Motor(robstride);
 }
 
 /*******************************************************************************
@@ -739,7 +742,7 @@ void RobStride_Motor_MIT_MotorModeSet(RobStride *robstride, uint8_t F_CMD)
 * @Return       : void
 * @Description  : Automatically called when the motor class is created.
 *******************************************************************************/
-void data_read_write_init(data_read_write *this, const uint16_t *index_list)
+void RobStride_data_read_write_init(RobStride_data_read_write *this, const uint16_t *index_list)
 {
 	this->run_mode.index = index_list[0];
 	this->iq_ref.index = index_list[1];
