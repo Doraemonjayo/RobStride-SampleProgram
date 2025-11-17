@@ -1,7 +1,5 @@
 #include "RobStride.h"
 #include "string.h"
-#include "BoardAPI.h" //TODO あとで消す
-#define hcan hcan1 //TODO あとで消す
 
 #define P_MIN -12.5f
 #define P_MAX 12.5f
@@ -22,12 +20,13 @@ uint32_t Mailbox; // CAN Tx mailbox
 * @Return       : void
 * @Description  : Initialize motor ID.
 *******************************************************************************/
-void RobStride_Init(RobStride *robstride, uint8_t CAN_Id, bool MIT_mode) {
+void RobStride_Init(RobStride *robstride, uint8_t CAN_Id, bool MIT_mode, void (*canTxFunc)(uint32_t id, const uint8_t *data, uint8_t dlc, bool isExtended, bool isRemote)) {
     robstride->CAN_ID = CAN_Id;
     robstride->Master_CAN_ID = 0xFD;
     robstride->Motor_Set_All.set_motor_mode = move_control_mode;
     robstride->MIT_Mode = MIT_mode;
     robstride->MIT_Type = operationControl;
+    robstride->canTxFunc = canTxFunc;
 }
 
 /*******************************************************************************
@@ -38,7 +37,7 @@ void RobStride_Init(RobStride *robstride, uint8_t CAN_Id, bool MIT_mode) {
 * @Param4       : Bit width
 * @Return       : Float in decimal
 *******************************************************************************/
-float uint16_to_float(uint16_t x,float x_min,float x_max,int bits) {
+static float uint16_to_float(uint16_t x,float x_min,float x_max,int bits) {
     uint32_t span = (1 << bits) - 1;
     x &= span;
     float offset = x_max - x_min;
@@ -53,7 +52,7 @@ float uint16_to_float(uint16_t x,float x_min,float x_max,int bits) {
 * @Param4       : Bit width
 * @Return       : Integer (scaled)
 *******************************************************************************/
-int float_to_uint(float x,float x_min,float x_max,int bits) {
+static int float_to_uint(float x,float x_min,float x_max,int bits) {
     float span = x_max - x_min;
     float offset = x_min;
     if(x > x_max) x = x_max;
@@ -97,49 +96,53 @@ uint8_t mapFaults(uint16_t fault16) {
 * @Return       : None
 * @Description  : `drw` is valid only after communication 17 is sent
 *******************************************************************************/
-void RobStride_Motor_Analysis(RobStride *robstride, uint8_t *DataFrame,uint32_t ID_ExtId)
+void RobStride_Motor_Analysis(RobStride *robstride, uint32_t id, uint8_t *data, uint8_t dlc, bool isExtended, bool isRemote)
 {
+	if (!isExtended) return;
+	if (isRemote) return;
+	if (dlc != 8) return;
+
     if(robstride->MIT_Mode)
     {
-        if((ID_ExtId & 0xFF) == 0XFD)
+        if((id & 0xFF) == 0XFD)
         {
             // MIT Fault frame
-            if(DataFrame[3] == 0x00 && DataFrame[4] == 0x00 && DataFrame[5] == 0x00 && DataFrame[6] == 0x00 && DataFrame[7] == 0x00)
+            if(data[3] == 0x00 && data[4] == 0x00 && data[5] == 0x00 && data[6] == 0x00 && data[7] == 0x00)
             {
                 uint16_t fault16 = 0;
-                memcpy(&fault16, &DataFrame[1], 2);
+                memcpy(&fault16, &data[1], 2);
                 robstride->error_code = mapFaults(fault16);
             }
             else
             {
                 // MIT Feedback frame
-            	robstride->Pos_Info.Angle  = uint16_to_float((DataFrame[1]<<8)|(DataFrame[2]), P_MIN, P_MAX, 16);
-            	robstride->Pos_Info.Speed  = uint16_to_float((DataFrame[3]<<4)|(DataFrame[4]>>4), V_MIN, V_MAX, 12);
-            	robstride->Pos_Info.Torque = uint16_to_float((DataFrame[4]<<8)|(DataFrame[5]), T_MIN, T_MAX, 12);
-            	robstride->Pos_Info.Temp   = ((DataFrame[6]<<8) | DataFrame[7]) * 0.1;
+            	robstride->Pos_Info.Angle  = uint16_to_float((data[1]<<8)|(data[2]), P_MIN, P_MAX, 16);
+            	robstride->Pos_Info.Speed  = uint16_to_float((data[3]<<4)|(data[4]>>4), V_MIN, V_MAX, 12);
+            	robstride->Pos_Info.Torque = uint16_to_float((data[4]<<8)|(data[5]), T_MIN, T_MAX, 12);
+            	robstride->Pos_Info.Temp   = ((data[6]<<8) | data[7]) * 0.1;
             }
         }
         else
         {
-            memcpy(&robstride->Unique_ID, DataFrame, 8);
+            memcpy(&robstride->Unique_ID, data, 8);
         }
     }
     else
     {
-        if ((uint8_t)((ID_ExtId & 0xFF00) >> 8) == robstride->CAN_ID)
+        if ((uint8_t)((id & 0xFF00) >> 8) == robstride->CAN_ID)
         {
-            int type = (int)((ID_ExtId & 0x3F000000) >> 24);
+            int type = (int)((id & 0x3F000000) >> 24);
 
             // Position feedback mode
             if (type == 2)
             {
-            	robstride->Pos_Info.Angle  = uint16_to_float(DataFrame[0]<<8 | DataFrame[1], P_MIN, P_MAX, 16);
-            	robstride->Pos_Info.Speed  = uint16_to_float(DataFrame[2]<<8 | DataFrame[3], V_MIN, V_MAX, 16);
-            	robstride->Pos_Info.Torque = uint16_to_float(DataFrame[4]<<8 | DataFrame[5], T_MIN, T_MAX, 16);
-            	robstride->Pos_Info.Temp   = (DataFrame[6]<<8 | DataFrame[7]) * 0.1;
+            	robstride->Pos_Info.Angle  = uint16_to_float(data[0]<<8 | data[1], P_MIN, P_MAX, 16);
+            	robstride->Pos_Info.Speed  = uint16_to_float(data[2]<<8 | data[3], V_MIN, V_MAX, 16);
+            	robstride->Pos_Info.Torque = uint16_to_float(data[4]<<8 | data[5], T_MIN, T_MAX, 16);
+            	robstride->Pos_Info.Temp   = (data[6]<<8 | data[7]) * 0.1;
 
-            	robstride->error_code      = (uint8_t)((ID_ExtId & 0x3F0000) >> 16);
-            	robstride->Pos_Info.pattern= (uint8_t)((ID_ExtId & 0xC00000) >> 22);
+            	robstride->error_code      = (uint8_t)((id & 0x3F0000) >> 16);
+            	robstride->Pos_Info.pattern= (uint8_t)((id & 0xC00000) >> 22);
             }
 
             // Communication type 17 reply
@@ -147,32 +150,32 @@ void RobStride_Motor_Analysis(RobStride *robstride, uint8_t *DataFrame,uint32_t 
             {
                 for (int index_num = 0; index_num <= 13; index_num++)
                 {
-                    if ((DataFrame[1]<<8 | DataFrame[0]) == Index_List[index_num])
+                    if ((data[1]<<8 | data[0]) == Index_List[index_num])
                         switch(index_num)
                         {
-                            case 0:  robstride->drw.run_mode.data    = (uint8_t)(DataFrame[4]); break;
-                            case 1:  robstride->drw.iq_ref.data      = Byte_to_float(DataFrame); break;
-                            case 2:  robstride->drw.spd_ref.data     = Byte_to_float(DataFrame); break;
-                            case 3:  robstride->drw.imit_torque.data = Byte_to_float(DataFrame); break;
-                            case 4:  robstride->drw.cur_kp.data      = Byte_to_float(DataFrame); break;
-                            case 5:  robstride->drw.cur_ki.data      = Byte_to_float(DataFrame); break;
-                            case 6:  robstride->drw.cur_filt_gain.data = Byte_to_float(DataFrame); break;
-                            case 7:  robstride->drw.loc_ref.data     = Byte_to_float(DataFrame); break;
-                            case 8:  robstride->drw.limit_spd.data   = Byte_to_float(DataFrame); break;
-                            case 9:  robstride->drw.limit_cur.data   = Byte_to_float(DataFrame); break;
-                            case 10: robstride->drw.mechPos.data     = Byte_to_float(DataFrame); break;
-                            case 11: robstride->drw.iqf.data         = Byte_to_float(DataFrame); break;
-                            case 12: robstride->drw.mechVel.data     = Byte_to_float(DataFrame); break;
-                            case 13: robstride->drw.VBUS.data        = Byte_to_float(DataFrame); break;
+                            case 0:  robstride->drw.run_mode.data    = (uint8_t)(data[4]); break;
+                            case 1:  robstride->drw.iq_ref.data      = Byte_to_float(data); break;
+                            case 2:  robstride->drw.spd_ref.data     = Byte_to_float(data); break;
+                            case 3:  robstride->drw.imit_torque.data = Byte_to_float(data); break;
+                            case 4:  robstride->drw.cur_kp.data      = Byte_to_float(data); break;
+                            case 5:  robstride->drw.cur_ki.data      = Byte_to_float(data); break;
+                            case 6:  robstride->drw.cur_filt_gain.data = Byte_to_float(data); break;
+                            case 7:  robstride->drw.loc_ref.data     = Byte_to_float(data); break;
+                            case 8:  robstride->drw.limit_spd.data   = Byte_to_float(data); break;
+                            case 9:  robstride->drw.limit_cur.data   = Byte_to_float(data); break;
+                            case 10: robstride->drw.mechPos.data     = Byte_to_float(data); break;
+                            case 11: robstride->drw.iqf.data         = Byte_to_float(data); break;
+                            case 12: robstride->drw.mechVel.data     = Byte_to_float(data); break;
+                            case 13: robstride->drw.VBUS.data        = Byte_to_float(data); break;
                         }
                 }
             }
 
             // Communication type 0 reply (ID change response)
-            else if ((uint8_t)((ID_ExtId & 0xFF)) == 0xFE)
+            else if ((uint8_t)((id & 0xFF)) == 0xFE)
             {
-            	robstride->CAN_ID = (uint8_t)((ID_ExtId & 0xFF00)>>8);
-                memcpy(&robstride->Unique_ID, DataFrame, 8);
+            	robstride->CAN_ID = (uint8_t)((id & 0xFF00)>>8);
+                memcpy(&robstride->Unique_ID, data, 8);
             }
         }
     }
@@ -188,12 +191,8 @@ void RobStride_Motor_Analysis(RobStride *robstride, uint8_t *DataFrame,uint32_t 
 void RobStride_Get_CAN_ID(RobStride *robstride)
 {
     uint8_t txdata[8] = {0};                        // TX data
-    CAN_TxHeaderTypeDef TxMessage;                  // TX mailbox
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_Get_ID<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID;
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox); // Send CAN message
+    robstride->canTxFunc(Communication_Type_Get_ID<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 }
 
 /*******************************************************************************
@@ -209,7 +208,6 @@ void RobStride_Get_CAN_ID(RobStride *robstride)
 void RobStride_Motor_move_control(RobStride *robstride, float Torque, float Angle, float Speed, float Kp, float Kd)
 {
     uint8_t txdata[8] = {0};                        // TX data
-    CAN_TxHeaderTypeDef TxMessage;                  // TX mailbox
     robstride->Motor_Set_All.set_Torque = Torque;
     robstride->Motor_Set_All.set_angle = Angle;
     robstride->Motor_Set_All.set_speed = Speed;
@@ -229,11 +227,6 @@ void RobStride_Motor_move_control(RobStride *robstride, float Torque, float Angl
         Enable_Motor(robstride);
     }
 
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_MotionControl<<24 | float_to_uint(robstride->Motor_Set_All.set_Torque, T_MIN, T_MAX, 16)<<8 | robstride->CAN_ID;
-
     txdata[0] = float_to_uint(robstride->Motor_Set_All.set_angle, P_MIN, P_MAX, 16)>>8;
     txdata[1] = float_to_uint(robstride->Motor_Set_All.set_angle, P_MIN, P_MAX, 16);
     txdata[2] = float_to_uint(robstride->Motor_Set_All.set_speed, V_MIN, V_MAX, 16)>>8;
@@ -243,7 +236,8 @@ void RobStride_Motor_move_control(RobStride *robstride, float Torque, float Angl
     txdata[6] = float_to_uint(robstride->Motor_Set_All.set_Kd,   KD_MIN, KD_MAX, 16)>>8;
     txdata[7] = float_to_uint(robstride->Motor_Set_All.set_Kd,   KD_MIN, KD_MAX, 16);
 
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox); // Send CAN message
+    robstride->canTxFunc(Communication_Type_MotionControl<<24 | float_to_uint(robstride->Motor_Set_All.set_Torque, T_MIN, T_MAX, 16)<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 }
 
 /*******************************************************************************
@@ -254,15 +248,12 @@ void RobStride_Motor_move_control(RobStride *robstride, float Torque, float Angl
 void RobStride_Motor_MIT_Enable(RobStride *robstride)
 {
     uint8_t txdata[8] = {0};    // TX data array
-    CAN_TxHeaderTypeDef txMsg;  // TX mailbox
-    txMsg.StdId = robstride->CAN_ID;
-    txMsg.IDE = CAN_ID_STD;
-    txMsg.DLC = 8;
 
     txdata[0] = 0xFF; txdata[1] = 0xFF; txdata[2] = 0xFF; txdata[3] = 0xFF;
     txdata[4] = 0xFF; txdata[5] = 0xFF; txdata[6] = 0xFF; txdata[7] = 0xFC;
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);
+    robstride->canTxFunc(robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 /*******************************************************************************
@@ -273,15 +264,12 @@ void RobStride_Motor_MIT_Enable(RobStride *robstride)
 void RobStride_Motor_MIT_Disable(RobStride *robstride)
 {
     uint8_t txdata[8] = {0};    // TX data array
-    CAN_TxHeaderTypeDef txMsg;  // TX mailbox
-    txMsg.StdId = robstride->CAN_ID;
-    txMsg.IDE = CAN_ID_STD;
-    txMsg.DLC = 8;
 
     txdata[0] = 0xFF; txdata[1] = 0xFF; txdata[2] = 0xFF; txdata[3] = 0xFF;
     txdata[4] = 0xFF; txdata[5] = 0xFF; txdata[6] = 0xFF; txdata[7] = 0xFD;
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);
+    robstride->canTxFunc(robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 /*******************************************************************************
@@ -292,18 +280,14 @@ void RobStride_Motor_MIT_Disable(RobStride *robstride)
 void RobStride_Motor_MIT_ClearOrCheckError(RobStride *robstride, uint8_t F_CMD)
 {
     uint8_t txdata[8] = {0};    // TX data array
-    CAN_TxHeaderTypeDef txMsg;  // TX mailbox
-    txMsg.StdId = robstride->CAN_ID;
-    txMsg.IDE = CAN_ID_STD;
-    txMsg.RTR = CAN_RTR_DATA;
-    txMsg.DLC = 8;
 
     txdata[0] = 0xFF; txdata[1] = 0xFF; txdata[2] = 0xFF; txdata[3] = 0xFF;
     txdata[4] = 0xFF; txdata[5] = 0xFF;
     txdata[6] = F_CMD;
     txdata[7] = 0xFB;
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);     // Send CAN message
+    robstride->canTxFunc(robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 /*******************************************************************************
@@ -314,18 +298,14 @@ void RobStride_Motor_MIT_ClearOrCheckError(RobStride *robstride, uint8_t F_CMD)
 void RobStride_Motor_MIT_SetMotorType(RobStride *robstride, uint8_t F_CMD)
 {
     uint8_t txdata[8] = {0};    // TX data array
-    CAN_TxHeaderTypeDef txMsg;  // TX mailbox
-    txMsg.StdId = robstride->CAN_ID;
-    txMsg.IDE = CAN_ID_STD;
-    txMsg.RTR = CAN_RTR_DATA;
-    txMsg.DLC = 8;
 
     txdata[0] = 0xFF; txdata[1] = 0xFF; txdata[2] = 0xFF; txdata[3] = 0xFF;
     txdata[4] = 0xFF; txdata[5] = 0xFF;
     txdata[6] = F_CMD;
     txdata[7] = 0xFC;
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);
+    robstride->canTxFunc(robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 /*******************************************************************************
@@ -336,18 +316,14 @@ void RobStride_Motor_MIT_SetMotorType(RobStride *robstride, uint8_t F_CMD)
 void RobStride_Motor_MIT_SetMotorId(RobStride *robstride, uint8_t F_CMD)
 {
     uint8_t txdata[8] = {0};    // TX data array
-    CAN_TxHeaderTypeDef txMsg;  // TX mailbox
-    txMsg.StdId = robstride->CAN_ID;
-    txMsg.IDE = CAN_ID_STD;
-    txMsg.RTR = CAN_RTR_DATA;
-    txMsg.DLC = 8;
 
     txdata[0] = 0xFF; txdata[1] = 0xFF; txdata[2] = 0xFF; txdata[3] = 0xFF;
     txdata[4] = 0xFF; txdata[5] = 0xFF;
     txdata[6] = F_CMD;
     txdata[7] = 0x01;
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);
+    robstride->canTxFunc(robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 /*******************************************************************************
@@ -362,11 +338,6 @@ void RobStride_Motor_MIT_SetMotorId(RobStride *robstride, uint8_t F_CMD)
 void RobStride_Motor_MIT_Control(RobStride *robstride, float Angle, float Speed, float Kp, float Kd, float Torque)
 {
     uint8_t txdata[8] = {0};    // TX data array
-    CAN_TxHeaderTypeDef txMsg;  // TX mailbox
-    txMsg.StdId = robstride->CAN_ID;
-    txMsg.IDE = CAN_ID_STD;
-    txMsg.RTR = CAN_RTR_DATA;
-    txMsg.DLC = 8;
 
     txdata[0] = float_to_uint(Angle, P_MIN, P_MAX, 16)>>8;
     txdata[1] = float_to_uint(Angle, P_MIN, P_MAX, 16);
@@ -377,53 +348,38 @@ void RobStride_Motor_MIT_Control(RobStride *robstride, float Angle, float Speed,
     txdata[6] = (float_to_uint(Kd, KD_MIN, KD_MAX, 12)<<4) | (float_to_uint(Torque, T_MIN, T_MAX, 12)>>8);
     txdata[7] = float_to_uint(Torque, T_MIN, T_MAX, 12);
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);     // Send CAN message
+    robstride->canTxFunc(robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 // MIT position control mode
 void RobStride_Motor_MIT_PositionControl(RobStride *robstride, float position_rad, float speed_rad_per_s)
 {
     uint8_t txdata[8] = {0};     // TX data buffer
-    CAN_TxHeaderTypeDef txMsg;   // CAN TX header
-
-    txMsg.StdId = (1 << 8) | robstride->CAN_ID;  // Standard ID
-    txMsg.IDE = CAN_ID_STD;           // ID type
-    txMsg.RTR = CAN_RTR_DATA;         // Data frame
-    txMsg.DLC = 8;                    // Data length
 
     memcpy(&txdata[0], &position_rad, 4);      // Copy position (float)
     memcpy(&txdata[4], &speed_rad_per_s, 4);   // Copy velocity (float)
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);
+    robstride->canTxFunc((1 << 8) | robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 // MIT speed control mode
 void RobStride_Motor_MIT_SpeedControl(RobStride *robstride, float speed_rad_per_s, float current_limit)
 {
     uint8_t txdata[8] = {0};     // TX data buffer
-    CAN_TxHeaderTypeDef txMsg;   // CAN TX header
-
-    txMsg.StdId = (2 << 8) | robstride->CAN_ID;
-    txMsg.IDE = CAN_ID_STD;
-    txMsg.RTR = CAN_RTR_DATA;
-    txMsg.DLC = 8;
 
     memcpy(&txdata[0], &speed_rad_per_s, 4);
     memcpy(&txdata[4], &current_limit, 4);
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);
+    robstride->canTxFunc((2 << 8) | robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 // MIT zero-position setting
 void RobStride_Motor_MIT_SetZeroPos(RobStride *robstride)
 {
     uint8_t txdata[8] = {0};     // TX data buffer
-    CAN_TxHeaderTypeDef txMsg;   // CAN TX header
-
-    txMsg.StdId = robstride->CAN_ID;
-    txMsg.IDE = CAN_ID_STD;
-    txMsg.RTR = CAN_RTR_DATA;
-    txMsg.DLC = 8;
 
     txdata[0] = 0xFF;
     txdata[1] = 0xFF;
@@ -434,7 +390,8 @@ void RobStride_Motor_MIT_SetZeroPos(RobStride *robstride)
     txdata[6] = 0xFF;
     txdata[7] = 0xFE;
 
-    HAL_CAN_AddTxMessage(&hcan, &txMsg, txdata, &Mailbox);
+    robstride->canTxFunc(robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 /*******************************************************************************
@@ -457,7 +414,6 @@ void RobStride_Motor_Pos_control(RobStride *robstride, float Speed, float Angle)
         Set_RobStride_Motor_parameter(robstride, 0X7024, robstride->Motor_Set_All.set_limit_speed, Set_parameter);
         Set_RobStride_Motor_parameter(robstride, 0X7025, robstride->Motor_Set_All.set_acceleration, Set_parameter);
     }
-    HAL_Delay(1);
     Set_RobStride_Motor_parameter(robstride, 0X7016, robstride->Motor_Set_All.set_angle, Set_parameter);
 }
 
@@ -483,7 +439,6 @@ void RobStride_Motor_CSP_control(RobStride *robstride, float Angle, float limit_
             Enable_Motor(robstride);
             Set_RobStride_Motor_parameter(robstride, 0X7017, robstride->Motor_Set_All.set_limit_speed, Set_parameter);
         }
-        HAL_Delay(1);
         Set_RobStride_Motor_parameter(robstride, 0X7016, robstride->Motor_Set_All.set_angle, Set_parameter);
     }
 }
@@ -558,14 +513,9 @@ void Enable_Motor(RobStride *robstride)
     else
     {
         uint8_t txdata[8] = {0};                // TX data
-        CAN_TxHeaderTypeDef TxMessage;          // CAN TX header
 
-        TxMessage.IDE = CAN_ID_EXT;
-        TxMessage.RTR = CAN_RTR_DATA;
-        TxMessage.DLC = 8;
-        TxMessage.ExtId = Communication_Type_MotorEnable<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID;
-
-        HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox);
+        robstride->canTxFunc(Communication_Type_MotorEnable<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+        		txdata, 8, true, false);
     }
 }
 
@@ -583,16 +533,11 @@ void Disenable_Motor(RobStride *robstride, uint8_t clear_error)
     else
     {
         uint8_t txdata[8] = {0};                // TX data
-        CAN_TxHeaderTypeDef TxMessage;          // CAN TX header
 
         txdata[0] = clear_error;
 
-        TxMessage.IDE = CAN_ID_EXT;
-        TxMessage.RTR = CAN_RTR_DATA;
-        TxMessage.DLC = 8;
-        TxMessage.ExtId = Communication_Type_MotorStop<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID;
-
-        HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox);
+        robstride->canTxFunc(Communication_Type_MotorStop<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+        		txdata, 8, true, false);
 
         Set_RobStride_Motor_parameter(robstride, 0X7005, move_control_mode, Set_mode);
     }
@@ -608,12 +553,6 @@ void Disenable_Motor(RobStride *robstride, uint8_t clear_error)
 void Set_RobStride_Motor_parameter(RobStride *robstride, uint16_t Index, float Value, char Value_mode)
 {
     uint8_t txdata[8] = {0};                // TX data
-    CAN_TxHeaderTypeDef TxMessage;          // CAN TX header
-
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_SetSingleParameter<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID;
 
     txdata[0] = Index;
     txdata[1] = Index >> 8;
@@ -633,7 +572,8 @@ void Set_RobStride_Motor_parameter(RobStride *robstride, uint16_t Index, float V
         txdata[7] = 0x00;
     }
 
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox);
+    robstride->canTxFunc(Communication_Type_SetSingleParameter<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 }
 
 /*******************************************************************************
@@ -644,17 +584,12 @@ void Set_RobStride_Motor_parameter(RobStride *robstride, uint16_t Index, float V
 void Get_RobStride_Motor_parameter(RobStride *robstride, uint16_t Index)
 {
     uint8_t txdata[8] = {0};                // TX data
-    CAN_TxHeaderTypeDef TxMessage;          // CAN TX header
 
     txdata[0] = Index;
     txdata[1] = Index >> 8;
 
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_GetSingleParameter<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID;
-
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox);
+    robstride->canTxFunc(Communication_Type_GetSingleParameter<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 }
 
 /*******************************************************************************
@@ -667,14 +602,9 @@ void Set_CAN_ID(RobStride *robstride, uint8_t Set_CAN_ID)
     Disenable_Motor(robstride, 0);
 
     uint8_t txdata[8] = {0};                // TX data
-    CAN_TxHeaderTypeDef TxMessage;          // CAN TX header
 
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_Can_ID<<24 | Set_CAN_ID<<16 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID;
-
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox);
+    robstride->canTxFunc(Communication_Type_Can_ID<<24 | Set_CAN_ID<<16 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 }
 
 /*******************************************************************************
@@ -689,16 +619,11 @@ void Set_ZeroPos(RobStride *robstride)
     Disenable_Motor(robstride, 0);                      // Disable motor
 
     uint8_t txdata[8] = {0};                // TX data
-    CAN_TxHeaderTypeDef TxMessage;          // CAN TX header
-
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_SetPosZero<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID;
 
     txdata[0] = 1;
 
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox);
+    robstride->canTxFunc(Communication_Type_SetPosZero<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 
     Enable_Motor(robstride);
 }
@@ -714,11 +639,6 @@ void Set_ZeroPos(RobStride *robstride)
 void RobStride_Motor_MotorDataSave(RobStride *robstride)
 {
     uint8_t txdata[8] = {0};                // Data to send
-    CAN_TxHeaderTypeDef TxMessage;          // CAN Tx header
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_MotorDataSave<<24|robstride->Master_CAN_ID<<8|robstride->CAN_ID;
 
     txdata[0] = 0x01;
     txdata[1] = 0x02;
@@ -729,7 +649,8 @@ void RobStride_Motor_MotorDataSave(RobStride *robstride)
     txdata[6] = 0x07;
     txdata[7] = 0x08;
 
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox); // Send CAN message
+    robstride->canTxFunc(Communication_Type_MotorStop<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 }
 
 /*******************************************************************************
@@ -746,11 +667,6 @@ void RobStride_Motor_MotorDataSave(RobStride *robstride)
 void RobStride_Motor_BaudRateChange(RobStride *robstride, uint8_t F_CMD)
 {
     uint8_t txdata[8] = {0};                // Data to send
-    CAN_TxHeaderTypeDef TxMessage;          // CAN Tx header
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_BaudRateChange<<24|robstride->Master_CAN_ID<<8|robstride->CAN_ID;
 
     txdata[0] = 0x01;
     txdata[1] = 0x02;
@@ -761,7 +677,8 @@ void RobStride_Motor_BaudRateChange(RobStride *robstride, uint8_t F_CMD)
     txdata[6] = F_CMD;
     txdata[7] = 0x08;   // This byte is irrelevant, can be any value
 
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox); // Send CAN message
+    robstride->canTxFunc(Communication_Type_BaudRateChange<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 }
 
 /*******************************************************************************
@@ -776,11 +693,6 @@ void RobStride_Motor_BaudRateChange(RobStride *robstride, uint8_t F_CMD)
 void RobStride_Motor_ProactiveEscalationSet(RobStride *robstride, uint8_t F_CMD)
 {
     uint8_t txdata[8] = {0};                // Data to send
-    CAN_TxHeaderTypeDef TxMessage;          // CAN Tx header
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_ProactiveEscalationSet<<24|robstride->Master_CAN_ID<<8|robstride->CAN_ID;
 
     txdata[0] = 0x01;
     txdata[1] = 0x02;
@@ -791,7 +703,8 @@ void RobStride_Motor_ProactiveEscalationSet(RobStride *robstride, uint8_t F_CMD)
     txdata[6] = F_CMD;
     txdata[7] = 0x08;   // This byte is irrelevant, arbitrary value
 
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox); // Send CAN message
+    robstride->canTxFunc(Communication_Type_ProactiveEscalationSet<<24 | robstride->Master_CAN_ID<<8 | robstride->CAN_ID,
+    		txdata, 8, true, false);
 }
 
 /*******************************************************************************
@@ -806,11 +719,6 @@ void RobStride_Motor_ProactiveEscalationSet(RobStride *robstride, uint8_t F_CMD)
 void RobStride_Motor_MIT_MotorModeSet(RobStride *robstride, uint8_t F_CMD)
 {
     uint8_t txdata[8] = {0};                // Data to send
-    CAN_TxHeaderTypeDef TxMessage;          // CAN Tx header
-    TxMessage.IDE = CAN_ID_STD;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.StdId = robstride->CAN_ID;
 
     txdata[0] = 0xFF;
     txdata[1] = 0xFF;
@@ -821,7 +729,8 @@ void RobStride_Motor_MIT_MotorModeSet(RobStride *robstride, uint8_t F_CMD)
     txdata[6] = F_CMD;
     txdata[7] = 0xFD;   // This byte is irrelevant, arbitrary
 
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox); // Send CAN message
+    robstride->canTxFunc(robstride->CAN_ID,
+    		txdata, 8, false, false);
 }
 
 /*******************************************************************************
@@ -858,11 +767,6 @@ void data_read_write_init(data_read_write *this, const uint16_t *index_list)
 void RobStride_Motor_MotorModeSet(RobStride *robstride, uint8_t F_CMD)
 {
     uint8_t txdata[8] = {0};                // Data to send
-    CAN_TxHeaderTypeDef TxMessage;          // CAN Tx header
-    TxMessage.IDE = CAN_ID_EXT;
-    TxMessage.RTR = CAN_RTR_DATA;
-    TxMessage.DLC = 8;
-    TxMessage.ExtId = Communication_Type_MotorModeSet<<24|robstride->Master_CAN_ID<<8|robstride->CAN_ID;
 
     txdata[0] = 0x01;
     txdata[1] = 0x02;
@@ -873,5 +777,6 @@ void RobStride_Motor_MotorModeSet(RobStride *robstride, uint8_t F_CMD)
     txdata[6] = F_CMD;
     txdata[7] = 0x08;   // Arbitrary value
 
-    HAL_CAN_AddTxMessage(&hcan, &TxMessage, txdata, &Mailbox); // Send CAN message
+    robstride->canTxFunc(Communication_Type_MotorModeSet<<24|robstride->Master_CAN_ID<<8|robstride->CAN_ID,
+    		txdata, 8, true, false);
 }

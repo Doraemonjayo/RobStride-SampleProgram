@@ -122,17 +122,18 @@ typedef struct {
     int Can_Motor;
     Motor_Pos_RobStride_Info Pos_Info;     // Feedback values
     data_read_write drw;                   // Parameter read/write
+    void (*canTxFunc)(uint32_t id, const uint8_t *data, uint8_t dlc, bool isExtended, bool isRemote);
 } RobStride;
 
 void RobStride_Set_MIT_Mode(RobStride *robstride, bool MIT_Mode);
 void RobStride_Set_MIT_Type(RobStride *robstride, MIT_TYPE MIT_Type);
 
-void RobStride_Init(RobStride *robstride, uint8_t CAN_Id, bool MIT_Mode);
+void RobStride_Init(RobStride *robstride, uint8_t CAN_Id, bool MIT_Mode, void (*canTxFunc)(uint32_t id, const uint8_t *data, uint8_t dlc, bool isExtended, bool isRemote));
 
 void RobStride_Get_CAN_ID(RobStride *robstride);
 void Set_RobStride_Motor_parameter(RobStride *robstride, uint16_t Index, float Value, char Value_mode);
 void Get_RobStride_Motor_parameter(RobStride *robstride, uint16_t Index);
-void RobStride_Motor_Analysis(RobStride *robstride, uint8_t *DataFrame, uint32_t ID_ExtId);
+void RobStride_Motor_Analysis(RobStride *robstride, uint32_t id, uint8_t *data, uint8_t dlc, bool isExtended, bool isRemote);
 
 void RobStride_Motor_move_control(RobStride *robstride, float Torque, float Angle, float Speed, float Kp, float Kd);
 void RobStride_Motor_Pos_control(RobStride *robstride, float Speed, float Angle);
